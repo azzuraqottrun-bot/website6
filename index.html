@@ -2483,7 +2483,7 @@ document.addEventListener(
 ===================================================== */
 
 
-const API_URL = 'https://script.google.com/macros/s/AKfycbyemrZndeOpyxPOg_1eQmjq4QoXgKUzC_NrzQDyyLNUObZoyN8eoIOOXuamvT18HifL/exec'; // URL Web App Google Apps Script
+const API_URL = 'https://script.google.com/macros/s/AKfycbyemrZndeOpyxPOg_1eQmjq4QoXgKUzC_NrzQDyyLNUObZoyN8eoIOOXuamvT18HifL/exec'; // URL Web App Apps Script
 
 function runServer(method, args, success, failure) {
   const fail = typeof failure === 'function'
@@ -2491,54 +2491,83 @@ function runServer(method, args, success, failure) {
     : function(error) { console.error('API error:', error); };
 
   if (!API_URL || API_URL.indexOf('PASTE_URL_') === 0) {
-    fail(new Error('URL API Apps Script belum diatur. Isi konstanta API_URL di index.html.'));
+    fail(new Error('URL API Apps Script belum diatur.'));
     return;
   }
 
   const token = sessionStorage.getItem('ABSENSI_API_TOKEN') || '';
+  const nonce = 'req_' + Date.now() + '_' + Math.random().toString(36).slice(2);
+  const frameName = 'absensi_api_frame_' + nonce.replace(/[^a-zA-Z0-9_]/g, '');
+  const iframe = document.createElement('iframe');
+  iframe.name = frameName;
+  iframe.title = 'Koneksi API Absensi';
+  iframe.style.display = 'none';
 
-  fetch(API_URL, {
-    method: 'POST',
-    mode: 'cors',
-    redirect: 'follow',
-    headers: {
-      'Content-Type': 'text/plain;charset=utf-8'
-    },
-    body: JSON.stringify({
-      method: method,
-      args: Array.isArray(args) ? args : [],
-      token: token
-    })
-  })
-  .then(function(response) {
-    if (!response.ok) {
-      throw new Error('Server mengembalikan HTTP ' + response.status);
-    }
-    return response.text();
-  })
-  .then(function(raw) {
-    let payload;
-    try {
-      payload = JSON.parse(raw);
-    } catch (error) {
-      throw new Error('Respons API bukan JSON. Periksa URL deployment Apps Script dan akses Web App.');
-    }
+  const form = document.createElement('form');
+  form.method = 'POST';
+  form.action = API_URL;
+  form.target = frameName;
+  form.style.display = 'none';
 
+  const request = {
+    method: method,
+    args: Array.isArray(args) ? args : [],
+    token: token,
+    nonce: nonce
+  };
+  const field = document.createElement('input');
+  field.type = 'hidden';
+  field.name = 'payload';
+  field.value = JSON.stringify(request);
+  form.appendChild(field);
+
+  let finished = false;
+  const cleanup = function() {
+    window.removeEventListener('message', onMessage);
+    clearTimeout(timeoutId);
+    form.remove();
+    iframe.remove();
+  };
+  const finishError = function(error) {
+    if (finished) return;
+    finished = true;
+    cleanup();
+    fail(error instanceof Error ? error : new Error(String(error)));
+  };
+  const onMessage = function(event) {
+    // Verifikasi sumber iframe dan nonce untuk mengabaikan pesan lain.
+    const message = event.data;
+    if (!message || message.type !== 'ABSENSI_API_RESPONSE' || message.nonce !== nonce) return;
+
+    if (finished) return;
+    finished = true;
+    cleanup();
+
+    const payload = message.payload;
     if (!payload || payload.ok !== true) {
       if (payload && payload.authRequired) {
         sessionStorage.removeItem('ABSENSI_API_TOKEN');
         currentUser = null;
       }
-      throw new Error((payload && payload.message) || 'Permintaan API gagal.');
+      fail(new Error((payload && payload.message) || 'Respons API tidak valid.'));
+      return;
     }
+    if (typeof success === 'function') success(payload.result);
+  };
 
-    if (typeof success === 'function') {
-      success(payload.result);
-    }
-  })
-  .catch(function(error) {
-    fail(error);
-  });
+  window.addEventListener('message', onMessage);
+  document.body.appendChild(iframe);
+  document.body.appendChild(form);
+
+  const timeoutId = setTimeout(function() {
+    finishError(new Error('Waktu koneksi habis. Periksa URL Web App dan izin akses Apps Script.'));
+  }, 30000);
+
+  try {
+    form.submit();
+  } catch (error) {
+    finishError(error);
+  }
 }
 
 /* =====================================================
